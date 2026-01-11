@@ -29,36 +29,29 @@ CONFIG_FILE="${SCRIPT_DIR}/monitor_config.conf"
 LOG_FILE="${SCRIPT_DIR}/monitor.log"
 LOCK_FILE="/var/run/backup_monitor.pid"
 
+# 加载公共函数库
+source "${SCRIPT_DIR}/common.sh"
+
 # 读取配置函数（INI解析）
 declare -A WATCH_DIRS
 MARK_DIR=""
 SLEEP_INTERVAL=86400
 
 parse_config() {
-    local section=""
-    while IFS= read -r line || [[ -n "$line" ]]; do
-        line="${line%%#*}"
-        line="${line%%;*}"
-        # 去除前后空白
-        line="${line#"${line%%[![:space:]]*}"}"
-        line="${line%"${line##*[![:space:]]}"}" 
-        [[ -z "$line" ]] && continue
-        if [[ $line =~ ^\[(.*)\]$ ]]; then
-            section="${BASH_REMATCH[1]}"
-        elif [[ $section == "BACKUP" ]]; then
-            if [[ $line =~ ^MARK_DIR="(.*)"$ ]]; then
-                MARK_DIR="${BASH_REMATCH[1]}"
-            elif [[ $line =~ ^SLEEP_INTERVAL=([0-9]+) ]]; then
-                SLEEP_INTERVAL="${BASH_REMATCH[1]}"
-            elif [[ $line =~ ^WATCH_DIRS="(.*)"$ ]]; then
-                WATCH_LIST="${BASH_REMATCH[1]}"
-            fi
-        elif [[ ",${WATCH_LIST}," == *",${section},"* ]]; then
-            if [[ $line =~ ^PATH="(.*)"$ ]]; then
-                WATCH_DIRS[$section]="${BASH_REMATCH[1]}"
-            fi
+    # 第一步：读取 BACKUP section 的配置
+    MARK_DIR=$(read_section_value "BACKUP" "MARK_DIR" "$CONFIG_FILE")
+    SLEEP_INTERVAL=$(read_section_value "BACKUP" "SLEEP_INTERVAL" "$CONFIG_FILE")
+    WATCH_LIST=$(read_section_value "BACKUP" "WATCH_DIRS" "$CONFIG_FILE")
+    
+    # 第二步：根据 WATCH_LIST 读取各项目的配置
+    IFS=',' read -ra PROJECTS <<< "$WATCH_LIST"
+    for project in "${PROJECTS[@]}"; do
+        project="$(echo "$project" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+        path=$(read_section_value "$project" "PATH" "$CONFIG_FILE")
+        if [[ -n "$path" ]]; then
+            WATCH_DIRS[$project]="$path"
         fi
-    done < "$CONFIG_FILE"
+    done
 }
 
 # 日志函数
