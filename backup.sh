@@ -19,7 +19,9 @@ parse_config() {
     while IFS= read -r line || [[ -n "$line" ]]; do
         line="${line%%#*}"
         line="${line%%;*}"
-        line="${line//[$'\t\r\n']}" # 去除空白
+        # 去除前后空白
+        line="${line#"${line%%[![:space:]]*}"}"
+        line="${line%"${line##*[![:space:]]}"}" 
         [[ -z "$line" ]] && continue
         if [[ $line =~ ^\[(.*)\]$ ]]; then
             section="${BASH_REMATCH[1]}"
@@ -33,7 +35,7 @@ parse_config() {
             elif [[ $line =~ ^WATCH_DIRS="(.*)"$ ]]; then
                 WATCH_LIST="${BASH_REMATCH[1]}"
             fi
-        elif [[ $WATCH_LIST =~ $section ]]; then
+        elif [[ ",${WATCH_LIST}," == *",${section},"* ]]; then
             if [[ $line =~ ^PATH="(.*)"$ ]]; then
                 DIR_PATHS[$section]="${BASH_REMATCH[1]}"
             fi

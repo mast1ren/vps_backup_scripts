@@ -19,7 +19,7 @@ if [ "$1" != "background" ]; then
     fi
     $0 background > /dev/null 2>&1 &
     echo -e "${GREEN}监控脚本成功启动! (PID: $!)${NC}"
-    echo "你可以查看日志: /home/masteren/shell_script/backup/monitor.log"
+    echo "你可以查看日志: ${SCRIPT_DIR}/monitor.log"
     exit 0
 fi
 
@@ -39,7 +39,9 @@ parse_config() {
     while IFS= read -r line || [[ -n "$line" ]]; do
         line="${line%%#*}"
         line="${line%%;*}"
-        line="${line//[$'\t\r\n']}" # 去除空白
+        # 去除前后空白
+        line="${line#"${line%%[![:space:]]*}"}"
+        line="${line%"${line##*[![:space:]]}"}" 
         [[ -z "$line" ]] && continue
         if [[ $line =~ ^\[(.*)\]$ ]]; then
             section="${BASH_REMATCH[1]}"
@@ -51,7 +53,7 @@ parse_config() {
             elif [[ $line =~ ^WATCH_DIRS="(.*)"$ ]]; then
                 WATCH_LIST="${BASH_REMATCH[1]}"
             fi
-        elif [[ $WATCH_LIST =~ $section ]]; then
+        elif [[ ",${WATCH_LIST}," == *",${section},"* ]]; then
             if [[ $line =~ ^PATH="(.*)"$ ]]; then
                 WATCH_DIRS[$section]="${BASH_REMATCH[1]}"
             fi
