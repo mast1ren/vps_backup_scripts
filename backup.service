@@ -1,0 +1,12 @@
+[Unit]
+Description=VPS Backup Script (Daily 2:00)
+After=network.target
+
+[Service]
+Type=oneshot
+Environment=BACKUP_SCRIPT=/usr/local/bin/vps_backup.sh
+ExecStart=/bin/bash ${BACKUP_SCRIPT}
+User=root
+
+[Install]
+WantedBy=multi-user.target

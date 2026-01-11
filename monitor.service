@@ -1,0 +1,13 @@
+[Unit]
+Description=VPS Backup Monitor Service
+After=network.target
+
+[Service]
+Type=simple
+Environment=VPS_BACKUP_SCRIPTS_DIR=/opt/vps_backup_scripts
+ExecStart=/bin/bash ${VPS_BACKUP_SCRIPTS_DIR}/monitor.sh background
+Restart=always
+User=root
+
+[Install]
+WantedBy=multi-user.target
