@@ -34,6 +34,7 @@ source "${SCRIPT_DIR}/common.sh"
 
 # 读取配置函数（INI解析）
 declare -A WATCH_DIRS
+declare -A WATCH_TYPES
 MARK_DIR=""
 SLEEP_INTERVAL=86400
 
@@ -48,8 +49,10 @@ parse_config() {
     for project in "${PROJECTS[@]}"; do
         project="$(echo "$project" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
         path=$(read_section_value "$project" "PATH" "$CONFIG_FILE")
+        type=$(read_section_value "$project" "TYPE" "$CONFIG_FILE")
         if [[ -n "$path" ]]; then
             WATCH_DIRS[$project]="$path"
+            WATCH_TYPES[$project]="${type:-DIR}"
         fi
     done
 }
@@ -87,28 +90,48 @@ cleanup() {
 }
 
 # 监控单个目录
-monitor_directory() {
+monitor_target() {
     local project_name=$1
-    local dir=$2
+    local target_path=$2
+    local target_type=$3
     
-    # 检查目录是否存在
-    if [ ! -d "${dir}" ]; then
-        log "错误" "项目 ${project_name} 的目录 ${dir} 不存在"
+    # 检查目标是否存在
+    if [[ "$target_type" == "DIR" ]]; then
+        if [ ! -d "${target_path}" ]; then
+            log "错误" "项目 ${project_name} 的目录 ${target_path} 不存在"
+            return 1
+        fi
+        log "信息" "开始监控项目 ${project_name}，目录: ${target_path}"
+        # 监控目录（递归）
+        inotifywait -m -r -e modify,create,delete,move "${target_path}" 2>> "${LOG_FILE}" | while read -r directory events filename; do
+            local TODAY=$(date +"%Y-%m-%d")
+            local MARK_FILE="${MARK_DIR}/${project_name}_${TODAY}.mark"
+            
+            if [ ! -f "${MARK_FILE}" ]; then
+                touch "${MARK_FILE}"
+                log "信息" "检测到 ${project_name} 的变化，创建标记文件: ${MARK_FILE}"
+            fi
+        done &
+    elif [[ "$target_type" == "FILE" ]]; then
+        if [ ! -f "${target_path}" ]; then
+            log "错误" "项目 ${project_name} 的文件 ${target_path} 不存在"
+            return 1
+        fi
+        log "信息" "开始监控项目 ${project_name}，文件: ${target_path}"
+        # 监控单个文件（不递归）
+        inotifywait -m -e modify,create,delete,move "${target_path}" 2>> "${LOG_FILE}" | while read -r directory events filename; do
+            local TODAY=$(date +"%Y-%m-%d")
+            local MARK_FILE="${MARK_DIR}/${project_name}_${TODAY}.mark"
+            
+            if [ ! -f "${MARK_FILE}" ]; then
+                touch "${MARK_FILE}"
+                log "信息" "检测到 ${project_name} 的变化，创建标记文件: ${MARK_FILE}"
+            fi
+        done &
+    else
+        log "错误" "项目 ${project_name} 的类型 ${target_type} 不支持"
         return 1
     fi
-    
-    log "信息" "开始监控项目 ${project_name}，目录: ${dir}"
-    
-    # 启动单个 inotifywait 进程
-    inotifywait -m -r -e modify,create,delete,move "${dir}" 2>> "${LOG_FILE}" | while read -r directory events filename; do
-        local TODAY=$(date +"%Y-%m-%d")
-        local MARK_FILE="${MARK_DIR}/${project_name}_${TODAY}.mark"
-        
-        if [ ! -f "${MARK_FILE}" ]; then
-            touch "${MARK_FILE}"
-            log "信息" "检测到 ${project_name} 的变化，创建标记文件: ${MARK_FILE}"
-        fi
-    done &
 }
 
 # 主函数
@@ -135,10 +158,12 @@ main() {
     # 启动所有目录的监控
     IFS=',' read -ra PROJECTS <<< "$WATCH_LIST"
     for project in "${PROJECTS[@]}"; do
-        dir="${WATCH_DIRS[$project]}"
-        if [ -n "$dir" ]; then
-            monitor_directory "$project" "$dir"
-            log "信息" "已启动监控进程，项目: $project, 目录: $dir"
+        project="$(echo "$project" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+        path="${WATCH_DIRS[$project]}"
+        type="${WATCH_TYPES[$project]}"
+        if [ -n "$path" ]; then
+            monitor_target "$project" "$path" "$type"
+            log "信息" "已启动监控进程，项目: $project, 类型: $type, 路径: $path"
         else
             log "警告" "未找到项目 $project 的监控路径"
         fi

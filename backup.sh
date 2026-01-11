@@ -12,6 +12,7 @@ source "${SCRIPT_DIR}/common.sh"
 
 # 解析配置
 declare -A DIR_PATHS
+declare -A DIR_TYPES
 MARK_DIR=""
 TARGET_DIR=""
 BACKUP_NUM=3
@@ -29,16 +30,19 @@ parse_config() {
     for project in "${PROJECTS[@]}"; do
         project="$(echo "$project" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
         path=$(read_section_value "$project" "PATH" "$CONFIG_FILE")
+        type=$(read_section_value "$project" "TYPE" "$CONFIG_FILE")
         if [[ -n "$path" ]]; then
             DIR_PATHS[$project]="$path"
+            DIR_TYPES[$project]="${type:-DIR}"
         fi
     done
 }
 
 # 备份函数
-backup_directory() {
+backup_target() {
     local PROJECT_NAME=$1
     local SOURCE_PATH=$2
+    local SOURCE_TYPE=$3
     local DATE=$(date -d "-1 day" +"%Y-%m-%d")
     local ZIP_FILE="/tmp/${DATE}_${PROJECT_NAME}.zip"
     local MARK_FILE="${MARK_DIR}/${PROJECT_NAME}_${DATE}.mark"
@@ -50,8 +54,19 @@ backup_directory() {
 
     echo "Starting backup for ${PROJECT_NAME}..."
 
-    if [ ! -e "${SOURCE_PATH}" ]; then
-        echo "Error: Source path ${SOURCE_PATH} does not exist. Skipping."
+    # 检查源路径是否存在
+    if [[ "$SOURCE_TYPE" == "DIR" ]]; then
+        if [ ! -d "${SOURCE_PATH}" ]; then
+            echo "Error: Source directory ${SOURCE_PATH} does not exist. Skipping."
+            return 1
+        fi
+    elif [[ "$SOURCE_TYPE" == "FILE" ]]; then
+        if [ ! -f "${SOURCE_PATH}" ]; then
+            echo "Error: Source file ${SOURCE_PATH} does not exist. Skipping."
+            return 1
+        fi
+    else
+        echo "Error: Unknown source type ${SOURCE_TYPE}. Skipping."
         return 1
     fi
 
@@ -86,9 +101,11 @@ backup_directory() {
 parse_config
 IFS=',' read -ra PROJECTS <<< "$WATCH_LIST"
 for project in "${PROJECTS[@]}"; do
+    project="$(echo "$project" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
     path="${DIR_PATHS[$project]}"
+    type="${DIR_TYPES[$project]}"
     if [ -n "$path" ]; then
-        backup_directory "$project" "$path"
+        backup_target "$project" "$path" "$type"
     fi
 done
 echo "All backups completed at $(date +"%Y-%m-%d %H:%M:%S")."
