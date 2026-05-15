@@ -41,6 +41,23 @@ parse_config() {
     done
 }
 
+validate_config() {
+    if [ -z "${MARK_DIR}" ]; then
+        echo "Error: BACKUP.MARK_DIR is required."
+        return 1
+    fi
+
+    if [ -z "${TARGET_DIR}" ]; then
+        echo "Error: BACKUP.TARGET_DIR is required."
+        return 1
+    fi
+
+    if [ -z "${WATCH_LIST}" ]; then
+        echo "Error: BACKUP.WATCH_DIRS is required."
+        return 1
+    fi
+}
+
 report_monitor_failures() {
     local state_file
 
@@ -164,6 +181,7 @@ main() {
     fi
 
     parse_config
+    validate_config || return 1
     FAILED_MONITOR_DIR="${MARK_DIR}/.monitor_failures"
     report_monitor_failures
     IFS=',' read -ra PROJECTS <<< "$WATCH_LIST"

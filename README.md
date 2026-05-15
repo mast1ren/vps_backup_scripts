@@ -15,7 +15,7 @@
 
 ```
 vps_backup_scripts/
-├── monitor.sh              # 监控脚本（后台常驻）
+├── monitor.sh              # 监控脚本（前台运行，由 systemd 托管）
 ├── backup.sh               # 备份脚本（定时执行）
 ├── monitor_config.conf     # 配置文件
 ├── monitor.service         # Monitor systemd 服务文件
@@ -79,6 +79,8 @@ PATH="/etc/nginx/conf.d"
 - `BACKUP_NUM`：每个项目保留的最大备份版本数
 - `RETRY_COUNT`：单个项目备份失败后的重试次数，总尝试次数为 `RETRY_COUNT + 1`
 - `MONITOR_RESTART_RETRIES`：监控子进程异常退出后的重启重试次数，总尝试次数为 `MONITOR_RESTART_RETRIES + 1`
+- `HEALTH_CHECK_INTERVAL`：不在配置文件中开放，脚本内固定为 `30` 秒，格式为正整数秒
+- `MARK_DIR`、`WATCH_DIRS`、`TARGET_DIR`：这些关键配置不能为空；脚本启动时会做快速检查，缺失则直接报错退出
 - `[项目名]`：每个监控项目的详细配置
   - `TYPE`：资源类型，DIR 或 FILE
   - `PATH`：要监控/备份的实际路径
@@ -110,7 +112,7 @@ sudo cp backup.timer /etc/systemd/system/
 # 重新加载 systemd 配置
 sudo systemctl daemon-reload
 
-# 启用并启动监控服务（常驻后台）
+# 启用并启动监控服务（前台运行，由 systemd 托管）
 sudo systemctl enable monitor.service
 sudo systemctl start monitor.service
 
@@ -129,7 +131,8 @@ sudo systemctl start backup.timer
    - 检测到文件变化时，创建标记文件（格式：`项目名.mark`）
    - 标记文件存储在 `MARK_DIR` 目录下
    - 定期检查各监控子进程状态，发现退出时会按 `MONITOR_RESTART_RETRIES` 自动重试拉起
-   - 如果重试后仍然失败，会记录失败状态；备份脚本每天运行前会再次输出这些未恢复的监控错误
+   - 如果某个项目当天重试后仍然失败，会记录失败状态，并在当天暂停该项目的后续健康检查，到第二天再恢复尝试；其他项目不受影响
+   - 备份脚本每天运行前会再次输出这些未恢复的监控错误
 
 2. **备份阶段（backup.sh）**
    - 每天凌晨 2 点由 systemd timer 触发执行

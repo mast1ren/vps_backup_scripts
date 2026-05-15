@@ -116,6 +116,7 @@ fi
 count=$((count + 1))
 echo "${count}" > "${count_file}"
 echo "${target_path} MODIFY file.txt"
+sleep "${INOTIFY_STUB_SLEEP:-0}"
 exit 0
 EOF
     chmod +x "${stub_dir}/inotifywait"
@@ -251,6 +252,36 @@ EOF
     fi
 }
 
+test_backup_fails_fast_on_missing_required_config() {
+    local case_dir="${TMP_DIR}/backup_missing_config"
+    local config_file="${case_dir}/monitor_config.conf"
+    local log_file="${case_dir}/backup.log"
+    local status=0
+
+    mkdir -p "${case_dir}"
+
+    cat > "${config_file}" <<EOF
+[BACKUP]
+MARK_DIR="/tmp/marks"
+WATCH_DIRS="project"
+
+[project]
+TYPE="DIR"
+PATH="/tmp/project"
+EOF
+
+    set +e
+    CONFIG_FILE="${config_file}" LOG_FILE="${log_file}" bash "${SCRIPT_DIR}/backup.sh"
+    status=$?
+    set -e
+
+    assert_eq "${status}" "1"
+    if ! grep -q "Error: BACKUP.TARGET_DIR is required." "${log_file}"; then
+        echo "ASSERT FAILED: expected missing TARGET_DIR error in backup log"
+        exit 1
+    fi
+}
+
 test_monitor_creates_mark_file() {
     local case_dir="${TMP_DIR}/monitor"
     local watch_dir="${case_dir}/watch"
@@ -276,7 +307,7 @@ EOF
 
     prepare_inotify_stub "${stub_dir}"
 
-    PATH="${stub_dir}:$PATH" INOTIFY_STATE_DIR="${case_dir}" CONFIG_FILE="${config_file}" LOG_FILE="${log_file}" LOCK_FILE="${lock_file}" \
+    PATH="${stub_dir}:$PATH" INOTIFY_STATE_DIR="${case_dir}" INOTIFY_STUB_SLEEP=5 CONFIG_FILE="${config_file}" LOG_FILE="${log_file}" LOCK_FILE="${lock_file}" \
         HEALTH_CHECK_INTERVAL=5 bash "${SCRIPT_DIR}/monitor.sh" &
     monitor_pid=$!
 
@@ -319,11 +350,11 @@ TYPE="DIR"
 PATH="${watch_dir}"
 EOF
 
-    PATH="${stub_dir}:$PATH" INOTIFY_STATE_DIR="${case_dir}" CONFIG_FILE="${config_file}" LOG_FILE="${log_file}" LOCK_FILE="${lock_file}" \
-        HEALTH_CHECK_INTERVAL=1 bash "${SCRIPT_DIR}/monitor.sh" &
+    PATH="${stub_dir}:$PATH" INOTIFY_STATE_DIR="${case_dir}" INOTIFY_STUB_SLEEP=2 CONFIG_FILE="${config_file}" LOG_FILE="${log_file}" LOCK_FILE="${lock_file}" \
+        bash "${SCRIPT_DIR}/monitor.sh" &
     monitor_pid=$!
 
-    for _ in $(seq 1 10); do
+    for _ in $(seq 1 40); do
         if [ -f "${count_file}" ]; then
             restart_count="$(cat "${count_file}")"
             if [ "${restart_count}" -ge 2 ]; then
@@ -351,6 +382,7 @@ test_monitor_records_failure_after_retry_exhausted() {
     local lock_file="${case_dir}/monitor.pid"
     local stub_dir="${case_dir}/bin"
     local monitor_pid
+    local count_file="${case_dir}/watch.count"
 
     mkdir -p "${watch_dir}" "${mark_dir}" "${stub_dir}"
 
@@ -368,15 +400,25 @@ EOF
     cat > "${stub_dir}/inotifywait" <<'EOF'
 #!/bin/bash
 set -euo pipefail
+target_path="${@: -1}"
+state_dir="${INOTIFY_STATE_DIR:?}"
+project_key="$(basename "${target_path}")"
+count_file="${state_dir}/${project_key}.count"
+count=0
+if [ -f "${count_file}" ]; then
+    count="$(cat "${count_file}")"
+fi
+count=$((count + 1))
+echo "${count}" > "${count_file}"
 exit 1
 EOF
     chmod +x "${stub_dir}/inotifywait"
 
-    PATH="${stub_dir}:$PATH" CONFIG_FILE="${config_file}" LOG_FILE="${log_file}" LOCK_FILE="${lock_file}" \
-        HEALTH_CHECK_INTERVAL=1 bash "${SCRIPT_DIR}/monitor.sh" &
+    PATH="${stub_dir}:$PATH" INOTIFY_STATE_DIR="${case_dir}" CONFIG_FILE="${config_file}" LOG_FILE="${log_file}" LOCK_FILE="${lock_file}" \
+        bash "${SCRIPT_DIR}/monitor.sh" &
     monitor_pid=$!
 
-    for _ in $(seq 1 10); do
+    for _ in $(seq 1 40); do
         if [ -f "${failed_state_file}" ] && grep -q "Monitor process restart failed after 2 attempts" "${failed_state_file}"; then
             break
         fi
@@ -387,8 +429,13 @@ EOF
     wait "${monitor_pid}" 2>/dev/null || true
 
     assert_file_exists "${failed_state_file}"
+    assert_eq "$(cat "${count_file}")" "3"
     if ! grep -q "Monitor process restart failed after 2 attempts" "${failed_state_file}"; then
         echo "ASSERT FAILED: expected retry exhaustion reason in failed monitor state"
+        exit 1
+    fi
+    if ! grep -q "health checks suspended until" "${failed_state_file}"; then
+        echo "ASSERT FAILED: expected suspension marker in failed monitor state"
         exit 1
     fi
     assert_file_missing "${lock_file}"
@@ -397,6 +444,7 @@ EOF
 run_test "配置解析" test_config_parser
 run_test "备份失败重试后成功" test_backup_retries_then_succeeds
 run_test "备份失败保留标记" test_backup_failure_keeps_mark
+run_test "备份缺少关键配置时快速失败" test_backup_fails_fast_on_missing_required_config
 run_test "备份前输出未恢复的监控错误" test_backup_reports_monitor_failures
 run_test "监控触发标记" test_monitor_creates_mark_file
 run_test "监控子进程退出后自动拉起" test_monitor_restarts_failed_child

@@ -40,8 +40,10 @@ source "${SCRIPT_DIR}/common.sh"
 declare -A WATCH_DIRS
 declare -A WATCH_TYPES
 declare -A WATCH_PIDS
+declare -A WATCH_SUSPENDED_UNTIL
 MARK_DIR=""
-HEALTH_CHECK_INTERVAL="${HEALTH_CHECK_INTERVAL:-30}"
+# 监控健康检查间隔，单位秒，必须为正整数。
+HEALTH_CHECK_INTERVAL=30
 MONITOR_RESTART_RETRIES=3
 FAILED_MONITOR_DIR=""
 
@@ -62,6 +64,20 @@ parse_config() {
             WATCH_TYPES[$project]="${type:-DIR}"
         fi
     done
+}
+
+validate_config() {
+    if [ -z "${MARK_DIR}" ]; then
+        log "错误" "BACKUP.MARK_DIR 是必填项"
+        echo -e "${RED}错误: BACKUP.MARK_DIR 是必填项。${NC}"
+        return 1
+    fi
+
+    if [ -z "${WATCH_LIST}" ]; then
+        log "错误" "BACKUP.WATCH_DIRS 是必填项"
+        echo -e "${RED}错误: BACKUP.WATCH_DIRS 是必填项。${NC}"
+        return 1
+    fi
 }
 
 # 日志函数
@@ -115,6 +131,39 @@ clear_monitor_failure_state() {
     local project_name=$1
 
     rm -f "${FAILED_MONITOR_DIR}/${project_name}.state"
+}
+
+today_string() {
+    date +'%Y-%m-%d'
+}
+
+tomorrow_string() {
+    date -d 'tomorrow' +'%Y-%m-%d'
+}
+
+suspend_monitor_until_tomorrow() {
+    local project_name=$1
+
+    WATCH_SUSPENDED_UNTIL["${project_name}"]="$(tomorrow_string)"
+}
+
+clear_monitor_suspension_if_expired() {
+    local project_name=$1
+    local suspended_until="${WATCH_SUSPENDED_UNTIL[$project_name]}"
+    local today
+
+    if [ -z "${suspended_until}" ]; then
+        return 0
+    fi
+
+    today="$(today_string)"
+    if [[ "${today}" < "${suspended_until}" ]]; then
+        return 1
+    fi
+
+    WATCH_SUSPENDED_UNTIL["${project_name}"]=""
+    log "信息" "项目 ${project_name} 已进入新的一天，恢复健康检查"
+    return 0
 }
 
 start_monitor_process() {
@@ -210,9 +259,10 @@ restart_monitor_with_retries() {
     done
 
     WATCH_PIDS["${project_name}"]=""
+    suspend_monitor_until_tomorrow "${project_name}"
     write_monitor_failure_state "${project_name}" "${target_path}" "${target_type}" \
-        "Monitor process restart failed after ${max_attempts} attempts"
-    log "错误" "项目 ${project_name} 的监控子进程重启失败，已达到最大重试次数 ${max_attempts}"
+        "Monitor process restart failed after ${max_attempts} attempts; health checks suspended until $(tomorrow_string)"
+    log "错误" "项目 ${project_name} 的监控子进程重启失败，已达到最大重试次数 ${max_attempts}，当天不再继续健康检查，次日重试"
     return 1
 }
 
@@ -221,6 +271,10 @@ restart_monitor_if_needed() {
     local target_path=$2
     local target_type=$3
     local monitor_pid="${WATCH_PIDS[$project_name]}"
+
+    if ! clear_monitor_suspension_if_expired "${project_name}"; then
+        return 0
+    fi
 
     if [ -n "${monitor_pid}" ] && kill -0 "${monitor_pid}" 2>/dev/null; then
         return 0
@@ -261,6 +315,7 @@ main() {
 
     # 加载配置
     parse_config
+    validate_config || exit 1
     mkdir -p "${MARK_DIR}"
     FAILED_MONITOR_DIR="${MARK_DIR}/.monitor_failures"
     mkdir -p "${FAILED_MONITOR_DIR}"
@@ -281,9 +336,10 @@ main() {
                 log "信息" "已启动监控进程，项目: $project, 类型: $type, 路径: $path"
             else
                 WATCH_PIDS["${project}"]=""
-                write_monitor_failure_state "$project" "$path" "$type" \
-                    "Initial monitor start failed"
-                log "错误" "项目 $project 的监控进程启动失败，已记录错误状态"
+                log "警告" "项目 $project 的监控进程首次启动失败，正在按重试策略继续尝试"
+                if restart_monitor_with_retries "$project" "$path" "$type"; then
+                    log "信息" "项目 $project 的监控进程在重试后已恢复"
+                fi
             fi
         else
             log "警告" "未找到项目 $project 的监控路径"
