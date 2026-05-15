@@ -52,10 +52,11 @@ cd vps_backup_scripts
 ```ini
 [BACKUP]
 MARK_DIR="/path/to/marks"              # 标记文件存储目录
-SLEEP_INTERVAL=86400                    # 检查间隔（秒，默认24小时）
 WATCH_DIRS="blog,reader,nginx-conf"     # 监控项目列表（逗号分隔）
 TARGET_DIR="/path/to/backup"            # 备份文件存储目录
 BACKUP_NUM=3                            # 保留备份版本数量
+RETRY_COUNT=2                           # 单个项目失败后的重试次数
+MONITOR_RESTART_RETRIES=3               # 监控子进程故障后的重启重试次数
 
 [blog]
 TYPE="DIR"                              # 类型：DIR（目录）或 FILE（文件）
@@ -73,10 +74,11 @@ PATH="/etc/nginx/conf.d"
 **配置说明：**
 
 - `MARK_DIR`：存放变化标记文件的目录，monitor 检测到变化时会创建标记
-- `SLEEP_INTERVAL`：监控脚本的检查间隔（保留字段，当前未使用）
 - `WATCH_DIRS`：要监控的项目名称列表，与下方的配置块对应
 - `TARGET_DIR`：备份压缩包的存储目录
 - `BACKUP_NUM`：每个项目保留的最大备份版本数
+- `RETRY_COUNT`：单个项目备份失败后的重试次数，总尝试次数为 `RETRY_COUNT + 1`
+- `MONITOR_RESTART_RETRIES`：监控子进程异常退出后的重启重试次数，总尝试次数为 `MONITOR_RESTART_RETRIES + 1`
 - `[项目名]`：每个监控项目的详细配置
   - `TYPE`：资源类型，DIR 或 FILE
   - `PATH`：要监控/备份的实际路径
@@ -87,11 +89,13 @@ PATH="/etc/nginx/conf.d"
 
 **monitor.service**
 ```ini
-ExecStart=/bin/bash /your/actual/path/monitor.sh background
+# 修改为脚本实际安装目录
+ExecStart=/bin/bash /your/actual/path/monitor.sh
 ```
 
 **backup.service**
 ```ini
+# 修改为 backup.sh 的实际安装路径
 ExecStart=/bin/bash /your/actual/path/backup.sh
 ```
 
@@ -120,16 +124,19 @@ sudo systemctl start backup.timer
 ### 工作原理
 
 1. **监控阶段（monitor.sh）**
-   - 后台常驻运行，使用 inotifywait 监控配置文件中指定的目录
-   - 检测到文件变化时，创建日期标记文件（格式：`项目名_日期.mark`）
+   - 以前台方式运行，由 systemd 接管进程生命周期
+   - 使用 inotifywait 监控配置文件中指定的目录
+   - 检测到文件变化时，创建标记文件（格式：`项目名.mark`）
    - 标记文件存储在 `MARK_DIR` 目录下
+   - 定期检查各监控子进程状态，发现退出时会按 `MONITOR_RESTART_RETRIES` 自动重试拉起
+   - 如果重试后仍然失败，会记录失败状态；备份脚本每天运行前会再次输出这些未恢复的监控错误
 
 2. **备份阶段（backup.sh）**
    - 每天凌晨 2 点由 systemd timer 触发执行
-   - 检查前一天的标记文件，有标记则执行备份
+   - 检查项目对应的标记文件，有标记则执行备份
    - 压缩目标目录/文件为 zip 格式
    - 移动到 `TARGET_DIR` 并维护版本数量
-   - 删除已处理的标记文件
+   - 成功后删除标记文件；如果失败则按 `RETRY_COUNT` 重试，最终失败时保留标记文件，等待下次继续备份
 
 ### 服务管理命令
 
@@ -202,6 +209,7 @@ sudo systemctl restart backup.timer
 ```ini
 [BACKUP]
 WATCH_DIRS="blog,reader,new-project"
+RETRY_COUNT=2
 
 [new-project]
 TYPE="DIR"

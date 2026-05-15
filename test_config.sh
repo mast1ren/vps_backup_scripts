@@ -12,9 +12,9 @@ MARK_DIR=$(read_section_value "BACKUP" "MARK_DIR" "${SCRIPT_DIR}/monitor_config.
 echo "结果: [$MARK_DIR]"
 echo ""
 
-echo "测试 2: 读取 BACKUP section 的 SLEEP_INTERVAL"
-SLEEP_INTERVAL=$(read_section_value "BACKUP" "SLEEP_INTERVAL" "${SCRIPT_DIR}/monitor_config.conf")
-echo "结果: [$SLEEP_INTERVAL]"
+echo "测试 2: 读取 BACKUP section 的 RETRY_COUNT"
+RETRY_COUNT=$(read_section_value "BACKUP" "RETRY_COUNT" "${SCRIPT_DIR}/monitor_config.conf")
+echo "结果: [$RETRY_COUNT]"
 echo ""
 
 echo "测试 3: 读取 BACKUP section 的 WATCH_DIRS"

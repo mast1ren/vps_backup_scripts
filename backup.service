@@ -4,7 +4,8 @@ After=network.target
 
 [Service]
 Type=oneshot
-Environment=BACKUP_SCRIPT=/usr/local/bin/vps_backup.sh
+# 修改为 backup.sh 的实际安装路径后再启用服务
+Environment=BACKUP_SCRIPT=/opt/vps_backup_scripts/backup.sh
 ExecStart=/bin/bash ${BACKUP_SCRIPT}
 User=root
 
